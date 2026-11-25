@@ -1,16 +1,44 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  deleteLines,
+  duplicateLines,
+  indentLines,
+  moveLines,
+  toggleLineComments,
+} from '../utils/editorCommands'
 
 const MAX_HISTORY = 200
 const TYPING_COALESCE_MS = 500
+const LINE_HEIGHT_PX = 24
+const AUTO_PAIRS = {
+  '(': ')',
+  '[': ']',
+  '{': '}',
+  '"': '"',
+  "'": "'",
+  '`': '`',
+}
+const CLOSING_CHARS = new Set(Object.values(AUTO_PAIRS))
 
 /**
  * Editor de código ligero con numeración de líneas sincronizada,
- * soporte de Tab/Shift+Tab, historial Undo/Redo (Ctrl+Z / Ctrl+Y)
+ * ajuste de línea (Alt+Z), mover/duplicar/comentar/eliminar líneas,
+ * autocompletado de pares, historial Undo/Redo (Ctrl+Z / Ctrl+Y)
  * y atajo Ctrl+Enter para ejecutar.
  */
-export default function CodeEditor({ value, onChange, onRun }) {
+export default function CodeEditor({
+  value,
+  onChange,
+  onRun,
+  wordWrap = false,
+  onToggleWordWrap,
+}) {
   const textareaRef = useRef(null)
   const gutterRef = useRef(null)
+  const mirrorRef = useRef(null)
+
+  const [lineHeights, setLineHeights] = useState(null)
+  const [mirrorWidth, setMirrorWidth] = useState(0)
 
   const historyRef = useRef({
     stack: [{ value, start: 0, end: 0 }],
@@ -18,6 +46,8 @@ export default function CodeEditor({ value, onChange, onRun }) {
     lastInputAt: 0,
   })
   const isApplyingHistoryRef = useRef(false)
+
+  const lines = value.split('\n')
 
   // Sincronizar historial si `value` cambia externamente (ej. botón Reiniciar)
   useEffect(() => {
@@ -36,7 +66,33 @@ export default function CodeEditor({ value, onChange, onRun }) {
     }
   }, [value])
 
-  const lineCount = Math.max(1, value.split('\n').length)
+  // Observar ancho del textarea cuando el ajuste de línea (Alt + Z) está activo
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea || !wordWrap) return
+
+    const updateWidth = () => {
+      setMirrorWidth(textarea.clientWidth)
+    }
+    updateWidth()
+
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(textarea)
+    return () => observer.disconnect()
+  }, [wordWrap])
+
+  // Medir la altura real de cada línea envuelta para mantener alineados los números
+  useLayoutEffect(() => {
+    if (!wordWrap || !mirrorRef.current) {
+      setLineHeights(null)
+      return
+    }
+
+    const heights = Array.from(mirrorRef.current.children).map((node) =>
+      Math.max(LINE_HEIGHT_PX, node.getBoundingClientRect().height)
+    )
+    setLineHeights(heights)
+  }, [value, wordWrap, mirrorWidth])
 
   const pushHistory = (nextValue, start, end, { coalesce = false } = {}) => {
     const history = historyRef.current
@@ -82,6 +138,12 @@ export default function CodeEditor({ value, onChange, onRun }) {
     })
   }
 
+  const applyResult = (result) => {
+    if (result) {
+      applyEdit(result.value, result.start, result.end)
+    }
+  }
+
   const applySnapshot = (nextIndex) => {
     const history = historyRef.current
     const snapshot = history.stack[nextIndex]
@@ -121,7 +183,9 @@ export default function CodeEditor({ value, onChange, onRun }) {
 
   const handleKeyDown = (e) => {
     const hasMod = e.ctrlKey || e.metaKey
+    const textarea = textareaRef.current
 
+    // Ejecutar código (Ctrl + Enter / Cmd + Enter)
     if (hasMod && (e.key === 'Enter' || e.code === 'NumpadEnter')) {
       e.preventDefault()
       e.stopPropagation()
@@ -151,48 +215,52 @@ export default function CodeEditor({ value, onChange, onRun }) {
       return
     }
 
-    const textarea = textareaRef.current
-    if (!textarea) return
+    // Alternar ajuste de línea / Word Wrap (Alt + Z)
+    if (e.altKey && !hasMod && !e.shiftKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault()
+      onToggleWordWrap?.()
+      return
+    }
 
+    if (!textarea) return
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+
+    // Mover o duplicar líneas (Alt + Flecha Arriba / Abajo, Alt + Shift + Flecha Arriba / Abajo)
+    if (e.altKey && !hasMod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault()
+      const direction = e.key === 'ArrowUp' ? -1 : 1
+      applyResult(
+        e.shiftKey
+          ? duplicateLines(value, start, end, direction)
+          : moveLines(value, start, end, direction)
+      )
+      return
+    }
+
+    // Comentar / descomentar línea o selección (Ctrl + / o Cmd + /)
+    if (hasMod && !e.altKey && e.key === '/') {
+      e.preventDefault()
+      applyResult(toggleLineComments(value, start, end))
+      return
+    }
+
+    // Eliminar línea actual o seleccionada (Ctrl + Shift + K)
+    if (hasMod && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      applyResult(deleteLines(value, start, end))
+      return
+    }
+
+    // Indentar / desindentar (Tab / Shift + Tab)
     if (e.key === 'Tab') {
       e.preventDefault()
-      const start = textarea.selectionStart
-      const end = textarea.selectionEnd
+      applyResult(indentLines(value, start, end, e.shiftKey))
+      return
+    }
 
-      if (start === end && !e.shiftKey) {
-        const next = value.slice(0, start) + '  ' + value.slice(end)
-        applyEdit(next, start + 2, start + 2)
-        return
-      }
-
-      // Indentar o desindentar líneas seleccionadas
-      const lineStart = value.lastIndexOf('\n', start - 1) + 1
-      const lineEndIdx = value.indexOf('\n', end)
-      const blockEnd = lineEndIdx === -1 ? value.length : lineEndIdx
-      const selectedBlock = value.slice(lineStart, blockEnd)
-      const lines = selectedBlock.split('\n')
-
-      let deltaFirst = 0
-      let deltaTotal = 0
-      const updated = lines.map((line, idx) => {
-        if (e.shiftKey) {
-          const removeCount = line.startsWith('  ') ? 2 : line.startsWith('\t') ? 1 : 0
-          if (idx === 0) deltaFirst = -removeCount
-          deltaTotal -= removeCount
-          return line.slice(removeCount)
-        }
-        if (idx === 0) deltaFirst = 2
-        deltaTotal += 2
-        return '  ' + line
-      })
-
-      const next = value.slice(0, lineStart) + updated.join('\n') + value.slice(blockEnd)
-      const nextStart = Math.max(lineStart, start + deltaFirst)
-      const nextEnd = Math.max(lineStart, end + deltaTotal)
-      applyEdit(next, nextStart, nextEnd)
-    } else if (e.key === 'Enter') {
-      const start = textarea.selectionStart
-      const end = textarea.selectionEnd
+    // Salto de línea con auto-indentación
+    if (e.key === 'Enter') {
       const lineStart = value.lastIndexOf('\n', start - 1) + 1
       const currentLine = value.slice(lineStart, start)
       const indentMatch = currentLine.match(/^\s*/)
@@ -206,6 +274,59 @@ export default function CodeEditor({ value, onChange, onRun }) {
         const caret = start + insertion.length
         applyEdit(next, caret, caret)
       }
+      return
+    }
+
+    // Autocompletar pares de paréntesis, corchetes, llaves y comillas
+    if (!hasMod && !e.altKey && AUTO_PAIRS[e.key]) {
+      const openChar = e.key
+      const closeChar = AUTO_PAIRS[openChar]
+      const nextChar = value[end]
+
+      if (start !== end) {
+        e.preventDefault()
+        const selected = value.slice(start, end)
+        const next = value.slice(0, start) + openChar + selected + closeChar + value.slice(end)
+        applyEdit(next, start + 1, end + 1)
+        return
+      }
+
+      if (openChar === closeChar && nextChar === closeChar) {
+        e.preventDefault()
+        requestAnimationFrame(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 1
+        })
+        return
+      }
+
+      const isQuote = openChar === '"' || openChar === "'" || openChar === '`'
+      const canWrapEmpty = !isQuote || !nextChar || /[\s)\]}.,;:]/.test(nextChar)
+      if (canWrapEmpty) {
+        e.preventDefault()
+        const next = value.slice(0, start) + openChar + closeChar + value.slice(end)
+        applyEdit(next, start + 1, start + 1)
+      }
+      return
+    }
+
+    // Saltar sobre carácter de cierre si ya está justo delante del cursor
+    if (!hasMod && !e.altKey && start === end && CLOSING_CHARS.has(e.key) && value[start] === e.key) {
+      e.preventDefault()
+      requestAnimationFrame(() => {
+        textarea.selectionStart = textarea.selectionEnd = start + 1
+      })
+      return
+    }
+
+    // Borrar el par completo si se presiona Backspace entre () [] {} "" '' ``
+    if (e.key === 'Backspace' && start === end && start > 0) {
+      const prevChar = value[start - 1]
+      const nextChar = value[start]
+      if (AUTO_PAIRS[prevChar] && AUTO_PAIRS[prevChar] === nextChar) {
+        e.preventDefault()
+        const next = value.slice(0, start - 1) + value.slice(start + 1)
+        applyEdit(next, start - 1, start - 1)
+      }
     }
   }
 
@@ -216,10 +337,32 @@ export default function CodeEditor({ value, onChange, onRun }) {
         aria-hidden="true"
         className="select-none overflow-hidden border-r border-indigo-400/10 bg-[#080716]/80 px-3 py-3.5 text-right text-xs leading-6 text-slate-500"
       >
-        {Array.from({ length: lineCount }, (_, idx) => (
-          <div key={idx + 1}>{idx + 1}</div>
+        {lines.map((_, idx) => (
+          <div
+            key={idx + 1}
+            style={
+              wordWrap && lineHeights && lineHeights[idx]
+                ? { height: `${lineHeights[idx]}px` }
+                : undefined
+            }
+          >
+            {idx + 1}
+          </div>
         ))}
       </div>
+
+      {wordWrap && (
+        <div
+          ref={mirrorRef}
+          aria-hidden="true"
+          style={{ width: mirrorWidth || '100%' }}
+          className="pointer-events-none invisible fixed top-0 left-0 -z-10 px-4 py-3.5 font-mono text-[13.5px] leading-6 whitespace-pre-wrap wrap-break-word"
+        >
+          {lines.map((line, idx) => (
+            <div key={idx}>{line || '\u00A0'}</div>
+          ))}
+        </div>
+      )}
 
       <textarea
         ref={textareaRef}
@@ -233,7 +376,10 @@ export default function CodeEditor({ value, onChange, onRun }) {
         autoCorrect="off"
         aria-label="Editor de código JavaScript"
         placeholder="// Escribe tu código JavaScript aquí..."
-        className="h-full w-full resize-none overflow-auto bg-transparent px-4 py-3.5 font-mono text-[13.5px] leading-6 whitespace-pre text-slate-100 placeholder:text-slate-600 focus:outline-none"
+        className={`h-full w-full resize-none bg-transparent px-4 py-3.5 font-mono text-[13.5px] leading-6 text-slate-100 placeholder:text-slate-600 focus:outline-none ${wordWrap
+            ? 'overflow-x-hidden overflow-y-auto whitespace-pre-wrap wrap-break-word'
+            : 'overflow-auto whitespace-pre'
+          }`}
       />
     </div>
   )
