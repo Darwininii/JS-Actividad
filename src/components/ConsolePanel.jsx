@@ -123,7 +123,7 @@ export default function ConsolePanel({
       <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-indigo-400/15 bg-[#0b0a1a]/90 font-mono text-[13px]">
         <div className="flex-1 space-y-1.5 overflow-y-auto p-3.5" style={{ minHeight: 280, maxHeight: 460 }}>
           {logs.length === 0 && !pendingPrompt && !isRunning && (
-            <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center text-xs text-slate-500">
+            <div className="flex h-full min-h-65 flex-col items-center justify-center text-center text-xs text-slate-500">
               <FiTerminal className="mb-2 text-xl text-slate-600" />
               <p>Pulsa &quot;Ejecutar&quot; para ver la salida aquí.</p>
               <p className="mt-1 text-[11px] text-slate-600">
@@ -141,7 +141,7 @@ export default function ConsolePanel({
             return (
               <div
                 key={idx}
-                className={`flex items-start gap-2 rounded-md border px-2 py-1 leading-relaxed break-words whitespace-pre-wrap ${colorClass}`}
+                className={`flex items-start gap-2 rounded-md border px-2 py-1 leading-relaxed wrap-break-word whitespace-pre-wrap ${colorClass}`}
               >
                 {renderLogIcon(item.level)}
                 <span className="min-w-0 flex-1">{item.text}</span>

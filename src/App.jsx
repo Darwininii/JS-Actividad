@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import ConsolePanel from './components/ConsolePanel'
+import CreditsDialog from './components/CreditsDialog'
 import EditorPanel from './components/EditorPanel'
+import FooterBar from './components/FooterBar'
 import ToolbarHeader from './components/ToolbarHeader'
 import { useJsRunner } from './hooks/useJsRunner'
 
@@ -20,6 +22,7 @@ export default function App() {
   const [code, setCode] = useState(() => loadSavedState().code ?? DEFAULT_CODE)
   const [inputs, setInputs] = useState(() => loadSavedState().inputs ?? '')
   const [copied, setCopied] = useState(false)
+  const [creditsOpen, setCreditsOpen] = useState(false)
 
   const {
     logs,
@@ -46,6 +49,7 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
+      if (creditsOpen) return
       if ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.code === 'NumpadEnter')) {
         e.preventDefault()
         execute({ clearInputs: true })
@@ -53,7 +57,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [execute])
+  }, [creditsOpen, execute])
 
   const handleReset = () => {
     if (isRunning) stop({ silent: true })
@@ -102,7 +106,11 @@ export default function App() {
             onSubmitPrompt={submitPrompt}
           />
         </div>
+
+        <FooterBar onOpenCredits={() => setCreditsOpen(true)} />
       </section>
+
+      <CreditsDialog open={creditsOpen} onClose={() => setCreditsOpen(false)} />
     </main>
   )
 }
